@@ -1,0 +1,82 @@
+#
+#   BSD LICENSE
+#
+#   Copyright(c) 2014 Midokura SARL.
+#   All rights reserved.
+#
+#   Redistribution and use in source and binary forms, with or without
+#   modification, are permitted provided that the following conditions
+#   are met:
+#
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in
+#       the documentation and/or other materials provided with the
+#       distribution.
+#     * Neither the name of Intel Corporation nor the names of its
+#       contributors may be used to endorse or promote products derived
+#       from this software without specific prior written permission.
+#
+#   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+#   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+#   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+#   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+#   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+#   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+#   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+#   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+#   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+#   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+#   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+srcdir = @srcdir@
+abs_srcdir = @abs_srcdir@
+prefix = @prefix@
+exec_prefix = $(prefix)
+bindir = $(exec_prefix)/bin
+sbindir = $(exec_prefix)/sbin
+libexecdir = $(exec_prefix)/libexec
+datadir = $(prefix)/share
+enable_debug = @enable_debug@
+
+RTE_SDK = @RTE_SDK@
+RTE_TARGET = @RTE_TARGET@
+
+include $(RTE_SDK)/mk/rte.vars.mk
+
+all: lwip-dpdk
+
+APP = lwip-dpdk
+SRCS-y := main.c port-eth.c port-kni.c kniif.c ethif.c dispatch.c \
+	lwip/src/core/def.c \
+	lwip/src/core/init.c \
+	lwip/src/core/mem.c \
+	lwip/src/core/memp.c \
+	lwip/src/core/netif.c \
+	lwip/src/core/pbuf.c \
+	lwip/src/core/raw.c \
+	lwip/src/core/ipv4/icmp.c \
+	lwip/src/core/ipv4/inet_chksum.c \
+	lwip/src/core/ipv4/ip.c \
+	lwip/src/core/ipv4/ip_addr.c \
+	lwip/src/core/ipv4/ip_frag.c \
+	lwip/src/core/timers.c \
+	lwip/src/core/udp.c \
+	lwip/src/netif/etharp.c \
+	lwip-contrib/ports/unix/sys_arch.c
+EXTRA_CFLAGS += -Wall \
+	-I$(abs_srcdir) \
+	-I$(abs_srcdir)/lwip-contrib/ports/unix/include \
+	-I$(abs_srcdir)/lwip/src/include/ipv4 \
+	-I$(abs_srcdir)/lwip/src/include
+
+ifeq ($(enable_debug),yes)
+EXTRA_CFLAGS += -DLWIP_DEBUG=1 -O0 -g
+endif
+
+include $(RTE_SDK)/mk/rte.extapp.mk
+
+distclean: clean
+	@rm -f Makefile config.h config.status config.cache config.log
+	@rm -rf build autom4te.cache *~
