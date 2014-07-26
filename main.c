@@ -43,10 +43,13 @@
 
 #include <lwip/init.h>
 
+#include "bridge.h"
 #include "dispatch.h"
 #include "ethif.h"
 #include "kniif.h"
+#include "plugif.h"
 #include "main.h"
+#include "mempool.h"
 
 /* exported in lwipopts.h */
 unsigned char debug_flags = LWIP_DBG_OFF;
@@ -182,11 +185,17 @@ parse_args(int argc, char **argv)
 	struct net_port *port;
 
 #ifdef LWIP_DEBUG
-	while ((ch = getopt(argc, argv, "e:k:d")) != -1) {
+	while ((ch = getopt(argc, argv, "P:e:k:d")) != -1) {
 #else
-	while ((ch = getopt(argc, argv, "e:k:")) != -1) {
+	while ((ch = getopt(argc, argv, "P:e:k:")) != -1) {
 #endif
 	switch (ch) {
+		case 'P':
+			port = &BR0.plug.net_port;
+			if (parse_port(&port->net, optarg))
+				return -1;
+			port->rte_port_type = RTE_PORT_TYPE_PLUG;
+			break;
 		case 'e':
 			if (nr_ports >= PORT_MAX)
 				break;
@@ -205,6 +214,7 @@ parse_args(int argc, char **argv)
 			port->rte_port_type = RTE_PORT_TYPE_KNI;
 			nr_ports++;
 			break;
+
 #ifdef LWIP_DEBUG
 		case 'd':
 			debug_flags |= (LWIP_DBG_ON|
@@ -227,40 +237,51 @@ parse_args(int argc, char **argv)
 #define IP4_OR_NULL(ip_addr) ((ip_addr).addr == IPADDR_ANY ? 0 : &(ip_addr))
 
 static int
-create_eth_port(struct net_port *net_port, struct rte_mempool *mempool)
+create_eth_port(struct net_port *net_port, int socket_id)
 {
 	RTE_VERIFY(net_port->rte_port_type == RTE_PORT_TYPE_ETH);
 
 	struct net *net = &net_port->net;
 	struct rte_port_eth_params params = {
 		.port_id = net->port_id,
-		.mempool = mempool
+		.mempool = pktmbuf_pool,
 	};
-	struct ethif *ethif;
-	struct netif *netif;
 
-	ethif = ethif_alloc(rte_socket_id());
-	if (ethif == NULL)
-		rte_exit(EXIT_FAILURE, "Cannot alloc eth port\n");
+	if (!IP4_OR_NULL(net_port->net.ip_addr)) {
+		struct rte_port_eth *eth_port;
 
-	if (ethif_init(ethif, &params, rte_socket_id(), net_port) != ERR_OK)
-		rte_exit(EXIT_FAILURE, "Cannot init eth port\n");
+		eth_port = rte_port_eth_create(&params, socket_id, net_port);
+		if (!eth_port)
+			rte_exit(EXIT_FAILURE, "Cannot alloc kni port\n");
 
-	netif = &ethif->netif;
-	netif_add(netif,
-		  IP4_OR_NULL(net->ip_addr),
-		  IP4_OR_NULL(net->netmask),
-		  IP4_OR_NULL(net->gw),
-		  ethif,
-		  ethif_added_cb,
-		  ethernet_input);
-	netif_set_up(netif);
+		bridge_add_port(&BR0, net_port);
+	} else {
+		struct ethif *ethif;
+		struct netif *netif;
+
+		ethif = ethif_alloc(socket_id);
+		if (ethif == NULL)
+			rte_exit(EXIT_FAILURE, "Cannot alloc eth port\n");
+
+		if (ethif_init(ethif, &params, socket_id, net_port) != ERR_OK)
+			rte_exit(EXIT_FAILURE, "Cannot init eth port\n");
+
+		netif = &ethif->netif;
+		netif_add(netif,
+			  IP4_OR_NULL(net->ip_addr),
+			  IP4_OR_NULL(net->netmask),
+			  IP4_OR_NULL(net->gw),
+			  ethif,
+			  ethif_added_cb,
+			  ethernet_input);
+		netif_set_up(netif);
+	}
 
 	return 0;
 }
 
 static int
-create_kni_port(struct net_port *net_port, struct rte_mempool *mempool)
+create_kni_port(struct net_port *net_port, int socket_id)
 {
 	RTE_VERIFY(net_port->rte_port_type == RTE_PORT_TYPE_KNI);
 
@@ -268,27 +289,88 @@ create_kni_port(struct net_port *net_port, struct rte_mempool *mempool)
 	struct rte_port_kni_params params = {
 		.name = net->name,
 		.mbuf_size = MAX_PACKET_SZ,
-		.mempool = mempool
+		.mempool = pktmbuf_pool,
 	};
-	struct kniif *kniif;
-	struct netif *netif;
 
-	kniif = kniif_alloc(rte_socket_id());
-	if (kniif == NULL)
-		rte_exit(EXIT_FAILURE, "Cannot alloc kni port\n");
+	if (!IP4_OR_NULL(net_port->net.ip_addr)) {
+		struct rte_port_kni *kni_port;
 
-	if (kniif_init(kniif, &params, rte_socket_id(), net_port) != ERR_OK)
-		rte_exit(EXIT_FAILURE, "Cannot init kni port\n");
+		kni_port = rte_port_kni_create(&params, socket_id, net_port);
+		if (!kni_port)
+			rte_exit(EXIT_FAILURE, "Cannot alloc kni port\n");
 
-	netif = &kniif->netif;
-	netif_add(netif,
-		  IP4_OR_NULL(net->ip_addr),
-		  IP4_OR_NULL(net->netmask),
-		  IP4_OR_NULL(net->gw),
-		  kniif,
-		  kniif_added_cb,
-		  ethernet_input);
-	netif_set_up(netif);
+		bridge_add_port(&BR0, net_port);
+	} else {
+		struct kniif *kniif;
+		struct netif *netif;
+
+		kniif = kniif_alloc(socket_id);
+		if (kniif == NULL)
+			rte_exit(EXIT_FAILURE, "Cannot alloc kni interface\n");
+
+		if (kniif_init(kniif, &params, socket_id, net_port) != ERR_OK)
+			rte_exit(EXIT_FAILURE, "Cannot init kni interface\n");
+
+		netif = &kniif->netif;
+		netif_add(netif,
+			  IP4_OR_NULL(net->ip_addr),
+			  IP4_OR_NULL(net->netmask),
+			  IP4_OR_NULL(net->gw),
+			  kniif,
+			  kniif_added_cb,
+			  ethernet_input);
+		netif_set_up(netif);
+	}
+
+	return 0;
+}
+
+static int
+create_plug_port(struct net_port *net_port, int socket_id)
+{
+	RTE_VERIFY(net_port->rte_port_type == RTE_PORT_TYPE_PLUG);
+
+	struct net *net = &net_port->net;
+
+	if (!IP4_OR_NULL(net_port->net.ip_addr)) {
+		struct rte_port_plug *plug_port;
+		struct rte_port_plug_params params = {
+			.private_data = &BR0,
+		};
+
+		plug_port = rte_port_plug_create(&params, socket_id, net_port);
+		if (!plug_port)
+			rte_exit(EXIT_FAILURE, "Cannot alloc plug port\n");
+
+		bridge_add_port(&BR0, net_port);
+	} else {
+		struct rte_port_plug_params params = {
+			.rx_burst     = bridge_rx_burst,
+			.tx_burst     = bridge_tx_burst,
+			.private_data = &BR0,
+		};
+		struct plugif *plugif;
+		struct netif *netif;
+
+		plugif = plugif_alloc(socket_id);
+		if (plugif == NULL)
+			rte_exit(EXIT_FAILURE, "Cannot alloc plug interface\n");
+
+		if (plugif_init(plugif, &params, socket_id, net_port) != ERR_OK)
+			rte_exit(EXIT_FAILURE, "Cannot init plug interface\n");
+
+		netif = &plugif->netif;
+		netif_add(netif,
+			  IP4_OR_NULL(net->ip_addr),
+			  IP4_OR_NULL(net->netmask),
+			  IP4_OR_NULL(net->gw),
+			  plugif,
+			  plugif_added_cb,
+			  ethernet_input);
+		netif_set_up(netif);
+
+		bridge_add_plug(&BR0, net_port, plugif);
+	}
 
 	return 0;
 }
@@ -296,7 +378,6 @@ create_kni_port(struct net_port *net_port, struct rte_mempool *mempool)
 int
 main(int argc, char *argv[])
 {
-	struct rte_mempool *mempool;
 	int i, ret;
 
 	ret = rte_eal_init(argc, argv);
@@ -309,21 +390,14 @@ main(int argc, char *argv[])
         if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Invalid arguments\n");
 
-	mempool = rte_mempool_create("mbuf_pool", NB_MBUF, MBUF_SZ,
-				     MEMPOOL_CACHE_SZ,
-				     sizeof(struct rte_pktmbuf_pool_private),
-				     rte_pktmbuf_pool_init, NULL,
-				     rte_pktmbuf_init, NULL,
-				     rte_socket_id(), 0);
-	if (!mempool)
-		rte_panic("Cannot init mbuf pool\n");
-
 	if (rte_eal_pci_probe() < 0)
                 rte_exit(EXIT_FAILURE, "Cannot probe PCI\n");
 
         nr_eth_dev = rte_eth_dev_count();
 
 	RTE_LOG(INFO, APP, "Found %d ethernet device\n", nr_eth_dev);
+
+	mempool_init(rte_socket_id());
 
 	lwip_init();
 
@@ -334,13 +408,14 @@ main(int argc, char *argv[])
 		case RTE_PORT_TYPE_ETH:
 			if (net_port->net.port_id >= nr_eth_dev)
 				rte_exit(EXIT_FAILURE, "No ethernet device\n");
-			create_eth_port(net_port, mempool);
+
+			create_eth_port(net_port, rte_socket_id());
 
 			RTE_LOG(INFO, APP, "Created eth port port_id=%u\n",
 				net_port->net.port_id);
 			break;
 		case RTE_PORT_TYPE_KNI:
-			create_kni_port(net_port, mempool);
+			create_kni_port(net_port, rte_socket_id());
 
 			RTE_LOG(INFO, APP, "Created kni port name=%s\n",
 				net_port->net.name);
@@ -348,6 +423,12 @@ main(int argc, char *argv[])
 		default:
 			rte_exit(EXIT_FAILURE, "Invalid port type\n");
 		}
+	}
+
+	if (BR0.plug.net_port.rte_port_type == RTE_PORT_TYPE_PLUG) {
+		create_plug_port(&BR0.plug.net_port, rte_socket_id());
+
+		RTE_LOG(INFO, APP, "Created plug port in bridge\n");
 	}
 
 	RTE_LOG(INFO, APP, "Dispatching %d ports\n", nr_ports);

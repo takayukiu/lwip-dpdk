@@ -30,28 +30,21 @@
  *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef _MAIN_H_
-#define _MAIN_H_
+#ifndef _PLUGIF_H_
+#define _PLUGIF_H_
 
-/* Macros for printing using RTE_LOG */
-#define RTE_LOGTYPE_APP RTE_LOGTYPE_USER1
+#include "port-plug.h"
 
-/* Max size of a single packet */
-#define MAX_PACKET_SZ           2048
+struct plugif {
+	rte_port_type		 rte_port_type;
+	struct rte_port_plug	*plug_port;
+	struct netif		 netif;
+};
 
-/* Number of bytes needed for each mbuf */
-#define MBUF_SZ \
-        (MAX_PACKET_SZ + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
-
-/* Number of mbufs in mempool that is created */
-#define NB_MBUF                 8192
-
-/* How many packets to attempt to read from NIC in one go */
-#define PKT_BURST_SZ            32
-
-/* How many objects (mbufs) to keep in per-lcore mempool cache */
-#define MEMPOOL_CACHE_SZ        PKT_BURST_SZ
-
-extern struct rte_mempool *mempool;
+struct plugif * plugif_alloc(int socket_id);
+err_t plugif_init(struct plugif *plugif, struct rte_port_plug_params *params,
+		  int socket_id, struct net_port *net_port);
+err_t plugif_input(struct plugif *plugif, struct rte_mbuf *pkt);
+err_t plugif_added_cb(struct netif *netif);
 
 #endif

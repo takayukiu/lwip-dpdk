@@ -38,9 +38,11 @@
 
 #include <lwip/timers.h>
 
+#include "bridge.h"
 #include "dispatch.h"
 #include "ethif.h"
 #include "kniif.h"
+#include "main.h"
 
 /*
  * From lwip/src/include/lwip/opt.h:
@@ -62,7 +64,8 @@ ip_input_hook(struct pbuf *p, struct netif *inp)
 }
 
 static int
-to_ethif(struct netif *netif, struct rte_mbuf **pkts, uint32_t n_pkts)
+dispatch_to_ethif(struct netif *netif,
+		  struct rte_mbuf **pkts, uint32_t n_pkts)
 {
 	struct ethif *ethif = (struct ethif *)netif->state;
 	uint32_t i;
@@ -76,7 +79,8 @@ to_ethif(struct netif *netif, struct rte_mbuf **pkts, uint32_t n_pkts)
 }
 
 static int
-to_kniif(struct netif *netif, struct rte_mbuf **pkts, uint32_t n_pkts)
+dispatch_to_kniif(struct netif *netif,
+		  struct rte_mbuf **pkts, uint32_t n_pkts)
 {
 	struct kniif *kniif = (struct kniif *)netif->state;
 	uint32_t i;
@@ -87,6 +91,16 @@ to_kniif(struct netif *netif, struct rte_mbuf **pkts, uint32_t n_pkts)
 		kniif_input(kniif, pkts[i]);
 
 	return n_pkts;
+}
+
+static int
+dispatch_to_bridge(struct net_port *source_port,
+		   struct rte_mbuf **pkts, uint32_t n_pkts)
+{
+	struct bridge_port *bridge_port = source_port->bridge_port;
+	struct bridge *bridge = bridge_port->bridge;
+
+	return bridge_input(bridge, bridge_port, pkts, n_pkts);
 }
 
 static int
@@ -114,16 +128,23 @@ dispatch(struct net_port *ports, int nr_ports,
 		if (unlikely(n_pkts > pkt_burst_sz))
 			continue;
 
+		if (n_pkts == 0)
+			continue;
+
 		netif = net_port->netif;
-		switch (net_port->rte_port_type) {
-		case RTE_PORT_TYPE_ETH:
-			to_ethif(netif, pkts, n_pkts);
-			break;
-		case RTE_PORT_TYPE_KNI:
-			to_kniif(netif, pkts, n_pkts);
-			break;
-		default:
-			rte_exit(EXIT_FAILURE, "Invalid port type\n");
+		if (!netif) {
+			dispatch_to_bridge(net_port, pkts, n_pkts);
+		} else {
+			switch (net_port->rte_port_type) {
+			case RTE_PORT_TYPE_ETH:
+				dispatch_to_ethif(netif, pkts, n_pkts);
+				break;
+			case RTE_PORT_TYPE_KNI:
+				dispatch_to_kniif(netif, pkts, n_pkts);
+				break;
+			default:
+				rte_panic("Invalid port type\n");
+			}
 		}
 	}
 	return 0;

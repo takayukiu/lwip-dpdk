@@ -42,7 +42,9 @@
 static struct rte_port_ops rte_port_eth_ops;
 
 struct rte_port_eth *
-rte_port_eth_create(struct rte_port_eth_params *conf, int socket_id)
+rte_port_eth_create(struct rte_port_eth_params *conf,
+		    int socket_id,
+		    struct net_port *net_port)
 {
 	struct rte_port_eth *port;
 	uint8_t port_id = conf->port_id;
@@ -58,7 +60,6 @@ rte_port_eth_create(struct rte_port_eth_params *conf, int socket_id)
 	port->port_id = port_id;
 	port->rte_port.type = RTE_PORT_TYPE_ETH;
 	port->rte_port.ops = rte_port_eth_ops;
-	port->mempool = conf->mempool;
 
 	ret = rte_eth_dev_configure(port_id, 1, 1, &conf->eth_conf);
 	if (ret < 0) {
@@ -97,6 +98,8 @@ rte_port_eth_create(struct rte_port_eth_params *conf, int socket_id)
 	rte_eth_promiscuous_enable(port_id);
 
 	rte_eth_dev_info_get(port_id, &port->eth_dev_info);
+
+	net_port->rte_port = &port->rte_port;
 
 	return port;
 }

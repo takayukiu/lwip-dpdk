@@ -44,6 +44,7 @@
 #include <rte_memcpy.h>
 
 #include "kniif.h"
+#include "mempool.h"
 
 struct kniif *
 kniif_alloc(int socket_id)
@@ -61,14 +62,14 @@ kniif_init(struct kniif *kniif, struct rte_port_kni_params *params,
 {
 	kniif->rte_port_type = RTE_PORT_TYPE_KNI;
 
-	kniif->kni_port = rte_port_kni_create(params, socket_id);
+	kniif->kni_port = rte_port_kni_create(params, socket_id, net_port);
 	if (!kniif->kni_port)
 		return ERR_MEM;
 
 	memset(&kniif->netif, 0, sizeof(kniif->netif));
 
 	net_port->netif = &kniif->netif;
-	net_port->rte_port = &kniif->kni_port->rte_port;
+	RTE_VERIFY(net_port->rte_port == &kniif->kni_port->rte_port);
 
 	return ERR_OK;
 }
@@ -110,7 +111,7 @@ low_level_output(struct netif *netif, struct pbuf *p)
 
 	kni_port = kniif->kni_port;
 
-	m = rte_pktmbuf_alloc(kni_port->mempool);
+	m = rte_pktmbuf_alloc(pktmbuf_pool);
 	if (m == NULL)
 		return ERR_MEM;
 

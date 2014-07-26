@@ -36,84 +36,49 @@
 
 #include <rte_malloc.h>
 
-#include "port-kni.h"
+#include "port-plug.h"
 
-static struct rte_port_ops rte_port_kni_ops;
+static struct rte_port_ops rte_port_plug_ops;
 
-struct rte_port_kni *
-rte_port_kni_create(struct rte_port_kni_params *conf,
-		    int socket_id,
-		    struct net_port *net_port)
-
+struct rte_port_plug *
+rte_port_plug_create(struct rte_port_plug_params *conf,
+		     int socket_id,
+		     struct net_port *net_port)
 {
-	struct rte_port_kni *port;
-        struct rte_kni_conf kni_conf;
-        struct rte_kni_ops kni_ops;
+	struct rte_port_plug *port;
 
 	port = rte_zmalloc_socket("PORT", sizeof(*port), CACHE_LINE_SIZE,
 				  socket_id);
         if (port == NULL) {
-                RTE_LOG(ERR, PORT, "Cannot allocate kni port\n");
+                RTE_LOG(ERR, PORT, "Cannot allocate plug port\n");
 		return NULL;
 	}
 
-	memset(&kni_conf, 0, sizeof(kni_conf));
-	snprintf(kni_conf.name, RTE_KNI_NAMESIZE, "%s", conf->name);
-	kni_conf.mbuf_size = conf->mbuf_size;
+	port->rx_burst	    = conf->rx_burst;
+	port->tx_burst	    = conf->tx_burst;
+	port->private_data  = conf->private_data;
 
-	memset(&kni_ops, 0, sizeof(kni_ops));
+	port->rte_port.type = RTE_PORT_TYPE_PLUG;
+	port->rte_port.ops  = rte_port_plug_ops;
 
-	port->kni = rte_kni_alloc(conf->mempool, &kni_conf, &kni_ops);
-	if (port->kni == NULL) {
-                RTE_LOG(ERR, PORT, "Cannot allocate kni instance\n");
-		rte_free(port);
-		return NULL;
-	}
-
-	port->rte_port.type = RTE_PORT_TYPE_KNI;
-	port->rte_port.ops = rte_port_kni_ops;
-
-	net_port->rte_port = &port->rte_port;
+	net_port->rte_port  = &port->rte_port;
 
 	return port;
 }
 
 int
-rte_port_kni_rx_burst(struct rte_port *rte_port,
-		      struct rte_mbuf **pkts, uint32_t n_pkts)
+rte_port_plug_tx_burst(struct rte_port *rte_port,
+		       struct rte_mbuf **pkts, uint32_t n_pkts)
 {
-	struct rte_port_kni *p;
-	int rx;
+	struct rte_port_plug *p;
+	int tx = 0;
 
-	RTE_VERIFY(rte_port->type == RTE_PORT_TYPE_KNI);
+	RTE_VERIFY(rte_port->type == RTE_PORT_TYPE_PLUG);
 
-	p = container_of(rte_port, struct rte_port_kni, rte_port);
+	p = container_of(rte_port, struct rte_port_plug, rte_port);
 
-	rx = rte_kni_rx_burst(p->kni, pkts, n_pkts);
-	if (unlikely(rx > n_pkts)) {
-                RTE_LOG(ERR, PORT, "Failed to rx kni burst\n");
-		return rx;
-	}
-
-	p->rte_port.stats.rx_packets += rx;
-
-	rte_kni_handle_request(p->kni);
-
-	return rx;
-}
-
-int
-rte_port_kni_tx_burst(struct rte_port *rte_port,
-		      struct rte_mbuf **pkts, uint32_t n_pkts)
-{
-	struct rte_port_kni *p;
-	int tx;
-
-	RTE_VERIFY(rte_port->type == RTE_PORT_TYPE_KNI);
-
-	p = container_of(rte_port, struct rte_port_kni, rte_port);
-
-	tx = rte_kni_tx_burst(p->kni, pkts, n_pkts);
+	if (p->tx_burst)
+		tx = p->tx_burst(p, pkts, n_pkts);
 
 	p->rte_port.stats.tx_packets += tx;
 
@@ -127,7 +92,6 @@ rte_port_kni_tx_burst(struct rte_port *rte_port,
 	return tx;
 }
 
-static struct rte_port_ops rte_port_kni_ops = {
-	.rx_burst = rte_port_kni_rx_burst,
-	.tx_burst = rte_port_kni_tx_burst
+static struct rte_port_ops rte_port_plug_ops = {
+	.tx_burst = rte_port_plug_tx_burst
 };

@@ -30,28 +30,25 @@
  *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef _MAIN_H_
-#define _MAIN_H_
-
-/* Macros for printing using RTE_LOG */
-#define RTE_LOGTYPE_APP RTE_LOGTYPE_USER1
-
-/* Max size of a single packet */
-#define MAX_PACKET_SZ           2048
-
-/* Number of bytes needed for each mbuf */
-#define MBUF_SZ \
-        (MAX_PACKET_SZ + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
-
-/* Number of mbufs in mempool that is created */
-#define NB_MBUF                 8192
-
-/* How many packets to attempt to read from NIC in one go */
-#define PKT_BURST_SZ            32
-
-/* How many objects (mbufs) to keep in per-lcore mempool cache */
-#define MEMPOOL_CACHE_SZ        PKT_BURST_SZ
-
-extern struct rte_mempool *mempool;
-
+#ifdef HAVE_CONFIG_H
+#include <config.h>
 #endif
+
+#include "main.h"
+#include "mempool.h"
+
+struct rte_mempool *pktmbuf_pool;
+
+int
+mempool_init(int socket_id)
+{
+	pktmbuf_pool = rte_mempool_create(
+		"pktmbuf_pool", NB_MBUF, MBUF_SZ, MEMPOOL_CACHE_SZ,
+		sizeof(struct rte_pktmbuf_pool_private),
+		rte_pktmbuf_pool_init, NULL, rte_pktmbuf_init, NULL,
+		socket_id, 0);
+	if (!pktmbuf_pool)
+		rte_panic("Cannot init mbuf pool\n");
+
+	return 0;
+}

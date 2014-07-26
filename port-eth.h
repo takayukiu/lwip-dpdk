@@ -50,12 +50,12 @@ struct rte_port_eth_params {
 struct rte_port_eth {
 	uint8_t			 port_id;
 	struct rte_eth_dev_info	 eth_dev_info;
-	struct rte_mempool	*mempool;
 	struct rte_port		 rte_port;
 };
 
 struct rte_port_eth * rte_port_eth_create
-	(struct rte_port_eth_params *conf, int socket_id);
+	(struct rte_port_eth_params *conf, int socket_id,
+	 struct net_port *net_port);
 int rte_port_eth_tx_burst
 	(struct rte_port *rte_port, struct rte_mbuf **pkts, uint32_t n_pkts);
 

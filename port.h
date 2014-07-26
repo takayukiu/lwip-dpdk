@@ -33,12 +33,17 @@
 #ifndef _PORT_H_
 #define _PORT_H_
 
+#include <stdint.h>
+
+#include <rte_mbuf.h>
+
 #include <lwip/ip_addr.h>
 #include <lwip/netif.h>
 
 typedef enum {
 	RTE_PORT_TYPE_ETH = 1,
 	RTE_PORT_TYPE_KNI,
+	RTE_PORT_TYPE_PLUG = 90,
 } rte_port_type;
 
 struct rte_port rte_port;
@@ -75,10 +80,11 @@ struct net {
 };
 
 struct net_port {
-	rte_port_type	 rte_port_type;
-	struct net	 net;
-	struct netif	*netif;
-	struct rte_port *rte_port;
+	rte_port_type		 rte_port_type;
+	struct net		 net;
+	struct netif		*netif;
+	struct bridge_port	*bridge_port;
+	struct rte_port		*rte_port;
 };
 
 #ifndef container_of

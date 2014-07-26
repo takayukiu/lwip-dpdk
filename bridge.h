@@ -30,28 +30,42 @@
  *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef _MAIN_H_
-#define _MAIN_H_
+#ifndef _BRIDGE_H_
+#define _BRIDGE_H_
 
-/* Macros for printing using RTE_LOG */
-#define RTE_LOGTYPE_APP RTE_LOGTYPE_USER1
+#include "port-plug.h"
 
-/* Max size of a single packet */
-#define MAX_PACKET_SZ           2048
+#define BRIDGE_PORT_MAX		8
 
-/* Number of bytes needed for each mbuf */
-#define MBUF_SZ \
-        (MAX_PACKET_SZ + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
+struct bridge;
 
-/* Number of mbufs in mempool that is created */
-#define NB_MBUF                 8192
+struct bridge_port {
+	int		 port_id;
+	struct bridge	*bridge;
+	struct net_port *net_port;
+};
 
-/* How many packets to attempt to read from NIC in one go */
-#define PKT_BURST_SZ            32
+struct bridge_plug {
+	struct plugif	*plugif;
+	struct net_port	 net_port;
+};
 
-/* How many objects (mbufs) to keep in per-lcore mempool cache */
-#define MEMPOOL_CACHE_SZ        PKT_BURST_SZ
+struct bridge {
+	struct bridge_port	ports[BRIDGE_PORT_MAX];
+	int			nr_ports;
+	struct bridge_plug	plug;
+};
 
-extern struct rte_mempool *mempool;
+extern struct bridge BR0;
+
+int bridge_add_port(struct bridge *bridge, struct net_port *net_port);
+int bridge_add_plug(struct bridge *bridge, struct net_port *net_port,
+		    struct plugif *plugif);
+int bridge_input(struct bridge *bridge, struct bridge_port *ingress,
+		 struct rte_mbuf **pkts, int n_pkts);
+int bridge_rx_burst(struct rte_port_plug *plug_port,
+		    struct rte_mbuf **pkts, uint32_t n_pkts);
+int bridge_tx_burst(struct rte_port_plug *plug_port,
+		    struct rte_mbuf **pkts, uint32_t n_pkts);
 
 #endif

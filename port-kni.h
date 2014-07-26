@@ -45,12 +45,12 @@ struct rte_port_kni_params {
 
 struct rte_port_kni {
 	struct rte_kni		*kni;
-	struct rte_mempool	*mempool;
 	struct rte_port		 rte_port;
 };
 
 struct rte_port_kni * rte_port_kni_create
-	(struct rte_port_kni_params *conf, int socket_id);
+	(struct rte_port_kni_params *conf, int socket_id,
+	 struct net_port *net_port);
 int rte_port_kni_tx_burst
 	(struct rte_port *rte_port, struct rte_mbuf **pkts, uint32_t n_pkts);
 

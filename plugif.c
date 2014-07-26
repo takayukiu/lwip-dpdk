@@ -34,58 +34,54 @@
 #include <config.h>
 #endif
 
-#include <lwip/mem.h>
-#include <lwip/netif.h>
+#include <rte_ether.h>
+#include <rte_malloc.h>
+
 #include <netif/etharp.h>
 
-#include <rte_ether.h>
-#include <rte_mbuf.h>
-#include <rte_malloc.h>
-#include <rte_memcpy.h>
-
-#include "ethif.h"
+#include "plugif.h"
 #include "mempool.h"
 
-struct ethif *
-ethif_alloc(int socket_id)
+struct plugif *
+plugif_alloc(int socket_id)
 {
-	struct ethif *ethif;
+	struct plugif *plugif;
 
-	ethif = rte_zmalloc_socket("ETHIF", sizeof(ethif), CACHE_LINE_SIZE,
-				   socket_id);
-	return ethif;
+	plugif = rte_zmalloc_socket("PLUGIF", sizeof(plugif), CACHE_LINE_SIZE,
+				    socket_id);
+	return plugif;
 }
 
 err_t
-ethif_init(struct ethif *ethif, struct rte_port_eth_params *params,
-	   int socket_id, struct net_port *net_port)
+plugif_init(struct plugif *plugif, struct rte_port_plug_params *params,
+	    int socket_id, struct net_port *net_port)
 {
-	ethif->rte_port_type = RTE_PORT_TYPE_ETH;
+	plugif->rte_port_type = RTE_PORT_TYPE_PLUG;
 
-	ethif->eth_port = rte_port_eth_create(params, socket_id, net_port);
-	if (!ethif->eth_port)
+	plugif->plug_port = rte_port_plug_create(params, socket_id, net_port);
+	if (!plugif->plug_port)
 		return ERR_MEM;
 
-	memset(&ethif->netif, 0, sizeof(ethif->netif));
+	memset(&plugif->netif, 0, sizeof(plugif->netif));
 
-	net_port->netif = &ethif->netif;
-	RTE_VERIFY(net_port->rte_port == &ethif->eth_port->rte_port);
+	net_port->netif = &plugif->netif;
+	RTE_VERIFY(net_port->rte_port == &plugif->plug_port->rte_port);
 
 	return ERR_OK;
 }
 
 err_t
-ethif_input(struct ethif *ethif, struct rte_mbuf *m)
+plugif_input(struct plugif *plugif, struct rte_mbuf *m)
 {
 	int len = rte_pktmbuf_pkt_len(m);
 	char *dat = rte_pktmbuf_mtod(m, char *);
 	struct pbuf *p, *q;
 
-	RTE_VERIFY(ethif->rte_port_type == RTE_PORT_TYPE_ETH);
+	RTE_VERIFY(plugif->rte_port_type == RTE_PORT_TYPE_PLUG);
 
 	p = pbuf_alloc(PBUF_RAW, len, PBUF_POOL);
 	if (p == 0) {
-		ethif->eth_port->rte_port.stats.rx_dropped += 1;
+		plugif->plug_port->rte_port.stats.rx_dropped += 1;
 		return ERR_OK;
 	}
 
@@ -96,20 +92,20 @@ ethif_input(struct ethif *ethif, struct rte_mbuf *m)
 
 	rte_pktmbuf_free(m);
 
-	return ethif->netif.input(p, &ethif->netif);
+	return plugif->netif.input(p, &plugif->netif);
 }
 
 static err_t
 low_level_output(struct netif *netif, struct pbuf *p)
 {
-	struct ethif *ethif = (struct ethif *)netif->state;
-	struct rte_port_eth *eth_port;
+	struct plugif *plugif = (struct plugif *)netif->state;
+	struct rte_port_plug *plug_port;
 	struct rte_mbuf *m;
 	struct pbuf *q;
 
-	RTE_VERIFY(ethif->rte_port_type == RTE_PORT_TYPE_ETH);
+	RTE_VERIFY(plugif->rte_port_type == RTE_PORT_TYPE_PLUG);
 
-	eth_port = ethif->eth_port;
+	plug_port = plugif->plug_port;
 
 	m = rte_pktmbuf_alloc(pktmbuf_pool);
 	if (m == NULL)
@@ -124,25 +120,26 @@ low_level_output(struct netif *netif, struct pbuf *p)
 		rte_memcpy(data, q->payload, q->len);
 	}
 
-	rte_port_eth_tx_burst(&eth_port->rte_port, &m, 1);
+	if (plug_port->rx_burst)
+		plug_port->rx_burst(plug_port, &m, 1);
 
 	return ERR_OK;
 }
 
 err_t
-ethif_added_cb(struct netif *netif)
+plugif_added_cb(struct netif *netif)
 {
-	struct ethif *ethif = (struct ethif *)netif->state;
+	struct plugif *plugif = (struct plugif *)netif->state;
 
-	RTE_VERIFY(ethif->rte_port_type == RTE_PORT_TYPE_ETH);
+	RTE_VERIFY(plugif->rte_port_type == RTE_PORT_TYPE_PLUG);
 
-	netif->name[0] = 'e';
-	netif->name[1] = 't';
+	netif->name[0] = 'p';
+	netif->name[1] = 'g';
 	netif->output = etharp_output;
 	netif->linkoutput = low_level_output;
 	netif->mtu = 1500;
 	eth_random_addr(netif->hwaddr);
-	netif->hwaddr_len = ETHER_ADDR_LEN;
+	netif->hwaddr_len = 6;
 	netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP;
 	return ERR_OK;
 }
