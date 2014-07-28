@@ -33,7 +33,29 @@
 #ifndef _BRIDGE_H_
 #define _BRIDGE_H_
 
+#include <lwip/udp.h>
+
 #include "port-plug.h"
+
+#define VXLAN_DST_PORT		4789
+
+struct vxlanhdr {
+	u32_t	vx_flags;
+	u32_t	vx_vni;
+};
+
+struct vxlan_peer {
+	ip_addr_t	 ip_addr;
+	u16_t		 port;
+};
+
+#define VXLAN_DST_MAX		8
+
+struct vxlan {
+	struct udp_pcb		*local;
+	struct udp_pcb		*peers[VXLAN_DST_MAX];
+	int			 nr_peers;
+};
 
 #define BRIDGE_PORT_MAX		8
 
@@ -54,6 +76,7 @@ struct bridge {
 	struct bridge_port	ports[BRIDGE_PORT_MAX];
 	int			nr_ports;
 	struct bridge_plug	plug;
+	struct vxlan		vxlan;
 };
 
 extern struct bridge BR0;
@@ -61,11 +84,15 @@ extern struct bridge BR0;
 int bridge_add_port(struct bridge *bridge, struct net_port *net_port);
 int bridge_add_plug(struct bridge *bridge, struct net_port *net_port,
 		    struct plugif *plugif);
+int bridge_add_vxlan(struct bridge *bridge, struct vxlan_peer *peer);
+int bridge_bind_vxlan(struct bridge *bridge);
 int bridge_input(struct bridge *bridge, struct bridge_port *ingress,
 		 struct rte_mbuf **pkts, int n_pkts);
 int bridge_rx_burst(struct rte_port_plug *plug_port,
 		    struct rte_mbuf **pkts, uint32_t n_pkts);
 int bridge_tx_burst(struct rte_port_plug *plug_port,
 		    struct rte_mbuf **pkts, uint32_t n_pkts);
+int bridge_tx_vxlan_burst(struct rte_port_plug *plug_port,
+			  struct rte_mbuf **pkts, uint32_t n_pkts);
 
 #endif

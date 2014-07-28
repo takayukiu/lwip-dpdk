@@ -44,25 +44,6 @@
 #include "kniif.h"
 #include "main.h"
 
-/*
- * From lwip/src/include/lwip/opt.h:
- *
- * LWIP_HOOK_IP4_INPUT(pbuf, input_netif):
- * - called from ip_input() (IPv4)
- * - pbuf: received struct pbuf passed to ip_input()
- * - input_netif: struct netif on which the packet has been received
- * Return values:
- * - 0: Hook has not consumed the packet, packet is processed as normal
- * - != 0: Hook has consumed the packet.
- * If the hook consumed the packet, 'pbuf' is in the responsibility of
- * the hook (i.e. free it when done).
- */
-int
-ip_input_hook(struct pbuf *p, struct netif *inp)
-{
-	return 0; /* packet is processed as normal */
-}
-
 static int
 dispatch_to_ethif(struct netif *netif,
 		  struct rte_mbuf **pkts, uint32_t n_pkts)

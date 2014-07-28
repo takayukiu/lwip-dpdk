@@ -34,7 +34,9 @@
 #include <config.h>
 #endif
 
+#include <rte_byteorder.h>
 #include <rte_debug.h>
+#include <rte_memcpy.h>
 
 #include "bridge.h"
 #include "plugif.h"
@@ -78,15 +80,96 @@ bridge_add_plug(struct bridge *bridge, struct net_port *net_port,
 	return  0;
 }
 
+int
+bridge_add_vxlan(struct bridge *bridge, struct vxlan_peer *peer)
+{
+	struct udp_pcb *pcb;
+
+	if (bridge->vxlan.nr_peers >= VXLAN_DST_MAX)
+		return -1;
+
+	pcb = udp_new();
+	if (!pcb)
+		return -1;
+
+	if (udp_connect(pcb, &peer->ip_addr, peer->port) != ERR_OK) {
+		udp_remove(pcb);
+		return -1;
+	}
+
+	bridge->vxlan.peers[bridge->vxlan.nr_peers++] = pcb;
+
+	return 0;
+}
+
+static void
+vxlan_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+	   ip_addr_t *addr, u16_t port)
+{
+	struct bridge *bridge = (struct bridge *)arg;
+	struct rte_port *rte_port = bridge->plug.net_port.rte_port;
+	struct rte_port_plug *plug =
+		container_of(rte_port, struct rte_port_plug, rte_port);
+	struct rte_mbuf *m;
+	struct pbuf *q;
+
+	m = rte_pktmbuf_alloc(pktmbuf_pool);
+	if (m == NULL)
+		goto free_pbuf;
+
+	if (pbuf_header(p, -(int)(sizeof(struct vxlanhdr))) != 0)
+		goto free_mbuf;
+
+	for(q = p; q != NULL; q = q->next) {
+		char *data = rte_pktmbuf_append(m, q->len);
+		if (data == NULL)
+			goto free_mbuf;
+		rte_memcpy(data, q->payload, q->len);
+	}
+
+	bridge_rx_burst(plug, &m, 1);
+
+	goto free_pbuf;
+
+free_mbuf:
+	rte_pktmbuf_free(m);
+
+free_pbuf:
+	pbuf_free(p);
+}
+
+int
+bridge_bind_vxlan(struct bridge *bridge)
+{
+	struct udp_pcb *pcb;
+	err_t ret;
+
+	pcb = udp_new();
+	if (!pcb)
+		return ERR_MEM;
+
+	ret = udp_bind(pcb, IP_ADDR_ANY, VXLAN_DST_PORT);
+	if (ret != ERR_OK) {
+		udp_remove(pcb);
+		return ret;
+	}
+
+	udp_recv(pcb, vxlan_recv, bridge);
+
+	bridge->vxlan.local = pcb;
+
+	return ERR_OK;
+}
+
 static int
 bridge_flood(struct bridge *bridge, struct bridge_port *ingress,
 	     struct rte_mbuf **pkts, int n_pkts)
 {
 	struct net_port *net_port;
 	struct rte_port *rte_port;
-	struct rte_mbuf *pkts_clone[n_pkts];
+	struct rte_mbuf *pkts_clone[n_pkts], *clone;
 	int egress;
-	int i, j;
+	int i, j, k;
 
 	if (bridge->nr_ports <= 1) {
 		for (j = 0; j < n_pkts; j++)
@@ -104,12 +187,18 @@ bridge_flood(struct bridge *bridge, struct bridge_port *ingress,
 			break;
 		}
 
-		for (j = 0; j < n_pkts; j++)
-			pkts_clone[j] = rte_pktmbuf_clone(pkts[j], pktmbuf_pool);
+		for (j = 0; j < n_pkts; j++) {
+			clone = rte_pktmbuf_clone(pkts[j], pktmbuf_pool);
+			if (!clone) {
+				for (k = 0; k < j; k++)
+					rte_pktmbuf_free(pkts_clone[k]);
+				return -1;
+			}
+			pkts_clone[j] = clone;
+		}
 
 		rte_port->ops.tx_burst(rte_port, pkts_clone, n_pkts);
 	}
-
 	return 0;
 }
 
@@ -117,7 +206,10 @@ int
 bridge_input(struct bridge *bridge, struct bridge_port *ingress,
 	     struct rte_mbuf **pkts, int n_pkts)
 {
-	return bridge_flood(bridge, ingress, pkts, n_pkts);
+	if (bridge_flood(bridge, ingress, pkts, n_pkts) != 0)
+		return 0;
+
+	return n_pkts;
 }
 
 int
@@ -136,10 +228,74 @@ bridge_tx_burst(struct rte_port_plug *plug_port,
 {
 	struct bridge *bridge = (struct bridge *)plug_port->private_data;
 	struct plugif *plugif = bridge->plug.plugif;
-	uint32_t i;
+	uint32_t i, j;
 
-	for (i = 0; i < n_pkts; i++)
-		plugif_input(plugif, pkts[i]);
+	for (i = 0; i < n_pkts; i++) {
+		if (plugif_input(plugif, pkts[i]) != ERR_OK) {
+			for (j = i; j < n_pkts; j++) {
+				plug_port->rte_port.stats.rx_dropped += 1;
+				rte_pktmbuf_free(pkts[j]);
+			}
+			return i;
+		}
+	}
+	return n_pkts;
+}
 
+static err_t
+bridge_tx_vxlan(struct bridge *bridge, struct rte_mbuf *m)
+{
+	struct vxlanhdr *header;
+	struct pbuf *p, *q;
+	err_t ret;
+	int len, i;
+	char *dat;
+
+	header = (struct vxlanhdr *)rte_pktmbuf_prepend(m, sizeof(*header));
+	if (!header)
+		return ERR_MEM;
+
+	header->vx_flags = rte_cpu_to_be_32(0x08000000);
+	header->vx_vni =  rte_cpu_to_be_32(0x100);
+
+	len = rte_pktmbuf_pkt_len(m);
+	dat = rte_pktmbuf_mtod(m, char *);
+
+	for (i = 0; i < bridge->vxlan.nr_peers; i++) {
+		p = pbuf_alloc(PBUF_RAW, len + sizeof(*header), PBUF_POOL);
+		if (p == 0)
+			return ERR_MEM;
+
+		for(q = p; q != NULL; q = q->next) {
+			rte_memcpy(q->payload, dat, q->len);
+			dat += q->len;
+		}
+
+		ret = udp_send(bridge->vxlan.peers[i], p);
+		if (ret != ERR_OK) {
+			pbuf_free(p);
+			return ret;
+		}
+	}
+
+	return ERR_OK;
+}
+
+int
+bridge_tx_vxlan_burst(struct rte_port_plug *plug_port,
+		      struct rte_mbuf **pkts, uint32_t n_pkts)
+{
+	struct bridge *bridge = (struct bridge *)plug_port->private_data;
+	uint32_t i, j;
+
+	for (i = 0; i < n_pkts; i++) {
+		if (bridge_tx_vxlan(bridge, pkts[i]) != ERR_OK) {
+			for (j = i; j < n_pkts; j++) {
+				plug_port->rte_port.stats.rx_dropped += 1;
+				rte_pktmbuf_free(pkts[j]);
+			}
+		}
+		return i;
+	}
 	return n_pkts;
 }

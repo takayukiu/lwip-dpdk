@@ -89,8 +89,9 @@ parse_address(char* addr, struct addrinfo *info, int family) {
 }
 
 static int
-parse_pair(struct net *net, char* key, char* value)
+parse_port_pair(void *opts, char* key, char* value)
 {
+	struct net *net = (struct net *)opts;
 	struct addrinfo addr;
 	uint8_t* p;
 
@@ -129,10 +130,43 @@ parse_pair(struct net *net, char* key, char* value)
 	} else {
 		return -1;
 	}
+#undef PARSE_IP4
 }
 
 static int
-parse_port(struct net *net, char *param)
+parse_vxlan_pair(void *opts, char* key, char* value)
+{
+	struct vxlan_peer *peer = (struct vxlan_peer *)opts;
+	struct addrinfo addr;
+	uint8_t* p;
+
+	if (key == 0 || *key == 0)
+		return -1;
+
+#define PARSE_IP4(ip_addr)						\
+	do {								\
+		if (value == 0 || *value == 0)				\
+			return -1;					\
+		if (parse_address(value, &addr, AF_INET) != 0)		\
+			return -1;					\
+		p = (uint8_t*)&((struct sockaddr_in*)addr.ai_addr)->sin_addr; \
+		IP4_ADDR(&(ip_addr), *p, *(p+1), *(p+2), *(p+3));	\
+	} while(0)
+
+	if (!strcmp(key,"addr")) {
+		PARSE_IP4(peer->ip_addr);
+		return 0;
+	} else if (!strcmp(key,"port")) {
+		peer->port = atoi(value);
+		return 0;
+	} else {
+		return -1;
+	}
+#undef PARSE_IP4
+}
+
+static int
+parse_pairs(void *opts, char *param, int (*parse_pair)(void *, char*, char*))
 {
 	enum {
 		WAIT_KEY, KEY, WAIT_VALUE, VALUE, END
@@ -145,7 +179,7 @@ parse_port(struct net *net, char *param)
 	while (state != END) {
 		switch (*p) {
 		case '\0':
-			if (parse_pair(net, key, value) != 0)
+			if (parse_pair(opts, key, value) != 0)
 				return -1;
 			state = END;
 			break;
@@ -154,7 +188,7 @@ parse_port(struct net *net, char *param)
 				return -1;
 			state = WAIT_KEY;
 			*p++ = 0;
-			if (parse_pair(net, key, value) != 0)
+			if (parse_pair(opts, key, value) != 0)
 				return -1;
 			key = value = 0;
 			break;
@@ -179,15 +213,28 @@ parse_port(struct net *net, char *param)
 }
 
 static int
+parse_port(struct net *net, char *param)
+{
+	return parse_pairs(net, param, parse_port_pair);
+}
+
+static int
+parse_vxlan(struct vxlan_peer *peer, char *param)
+{
+	return parse_pairs(peer, param, parse_vxlan_pair);
+}
+
+static int
 parse_args(int argc, char **argv)
 {
 	int ch;
 	struct net_port *port;
+	struct vxlan_peer peer;
 
 #ifdef LWIP_DEBUG
-	while ((ch = getopt(argc, argv, "P:e:k:d")) != -1) {
+	while ((ch = getopt(argc, argv, "P:V:e:k:d")) != -1) {
 #else
-	while ((ch = getopt(argc, argv, "P:e:k:")) != -1) {
+	while ((ch = getopt(argc, argv, "P:V:e:k:")) != -1) {
 #endif
 	switch (ch) {
 		case 'P':
@@ -195,6 +242,13 @@ parse_args(int argc, char **argv)
 			if (parse_port(&port->net, optarg))
 				return -1;
 			port->rte_port_type = RTE_PORT_TYPE_PLUG;
+			break;
+		case 'V':
+			memset(&peer, 0, sizeof(peer));
+			if (parse_vxlan(&peer, optarg))
+				return -1;
+			if (bridge_add_vxlan(&BR0, &peer) != 0)
+				return -1;
 			break;
 		case 'e':
 			if (nr_ports >= PORT_MAX)
@@ -335,6 +389,7 @@ create_plug_port(struct net_port *net_port, int socket_id)
 	if (!IP4_OR_NULL(net_port->net.ip_addr)) {
 		struct rte_port_plug *plug_port;
 		struct rte_port_plug_params params = {
+			.tx_burst     = bridge_tx_vxlan_burst,
 			.private_data = &BR0,
 		};
 
@@ -342,7 +397,8 @@ create_plug_port(struct net_port *net_port, int socket_id)
 		if (!plug_port)
 			rte_exit(EXIT_FAILURE, "Cannot alloc plug port\n");
 
-		bridge_add_port(&BR0, net_port);
+		if (bridge_add_port(&BR0, net_port) != 0)
+			rte_exit(EXIT_FAILURE, "Cannot add bridge port\n");
 	} else {
 		struct rte_port_plug_params params = {
 			.rx_burst     = bridge_rx_burst,
@@ -369,7 +425,8 @@ create_plug_port(struct net_port *net_port, int socket_id)
 			  ethernet_input);
 		netif_set_up(netif);
 
-		bridge_add_plug(&BR0, net_port, plugif);
+		if (bridge_add_plug(&BR0, net_port, plugif) != 0)
+			rte_exit(EXIT_FAILURE, "Cannot add plug port\n");
 	}
 
 	return 0;
@@ -386,6 +443,8 @@ main(int argc, char *argv[])
 	argc -= ret;
         argv += ret;
 
+	lwip_init();
+
 	ret = parse_args(argc, argv);
         if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Invalid arguments\n");
@@ -398,8 +457,6 @@ main(int argc, char *argv[])
 	RTE_LOG(INFO, APP, "Found %d ethernet device\n", nr_eth_dev);
 
 	mempool_init(rte_socket_id());
-
-	lwip_init();
 
 	for (i = 0; i < nr_ports; i++) {
 		struct net_port *net_port = &ports[i];
@@ -425,10 +482,17 @@ main(int argc, char *argv[])
 		}
 	}
 
-	if (BR0.plug.net_port.rte_port_type == RTE_PORT_TYPE_PLUG) {
+	if (BR0.plug.net_port.rte_port_type) {
 		create_plug_port(&BR0.plug.net_port, rte_socket_id());
 
 		RTE_LOG(INFO, APP, "Created plug port in bridge\n");
+
+		if (BR0.vxlan.nr_peers > 0){
+			if (bridge_bind_vxlan(&BR0) != ERR_OK)
+				rte_exit(EXIT_FAILURE, "Cannot bind VXLAN\n");
+
+			RTE_LOG(INFO, APP, "Bound VXLAN port\n");
+		}
 	}
 
 	RTE_LOG(INFO, APP, "Dispatching %d ports\n", nr_ports);
