@@ -116,7 +116,7 @@ low_level_output(struct netif *netif, struct pbuf *p)
 
 	plug_port = plugif->plug_port;
 
-	if (plug_port->rx_burst)
+	if (!plug_port->rx_burst)
 		return ERR_OK;
 
 	m = rte_pktmbuf_alloc(pktmbuf_pool);
