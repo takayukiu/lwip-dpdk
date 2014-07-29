@@ -54,6 +54,11 @@
 /* exported in lwipopts.h */
 unsigned char debug_flags = LWIP_DBG_OFF;
 
+/* eonfigurable number of RX/TX ring descriptors
+ */
+#define RTE_TEST_RX_DESC_DEFAULT 128
+#define RTE_TEST_TX_DESC_DEFAULT 512
+
 /* custom port abstraction (i.e. eth, kni with lwip) */
 #define PORT_MAX    8
 
@@ -298,6 +303,8 @@ create_eth_port(struct net_port *net_port, int socket_id)
 	struct net *net = &net_port->net;
 	struct rte_port_eth_params params = {
 		.port_id = net->port_id,
+		.nb_rx_desc = RTE_TEST_RX_DESC_DEFAULT,
+		.nb_tx_desc = RTE_TEST_TX_DESC_DEFAULT,
 		.mempool = pktmbuf_pool,
 	};
 
