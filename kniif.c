@@ -74,6 +74,10 @@ kniif_init(struct kniif *kniif, struct rte_port_kni_params *params,
 	return ERR_OK;
 }
 
+/* buffer ownership and responsivity [if_input]
+ *   pbuf: transfer the ownership of a newly allocated pbuf to lwip
+ *   mbuf: free all here
+ */
 err_t
 kniif_input(struct kniif *kniif, struct rte_mbuf *m)
 {
@@ -85,6 +89,7 @@ kniif_input(struct kniif *kniif, struct rte_mbuf *m)
 
 	p = pbuf_alloc(PBUF_RAW, len, PBUF_POOL);
 	if (p == 0) {
+		rte_pktmbuf_free(m);
 		kniif->kni_port->rte_port.stats.rx_dropped += 1;
 		return ERR_OK;
 	}
@@ -93,12 +98,16 @@ kniif_input(struct kniif *kniif, struct rte_mbuf *m)
 		rte_memcpy(q->payload, dat, q->len);
 		dat += q->len;
 	}
-
 	rte_pktmbuf_free(m);
 
 	return kniif->netif.input(p, &kniif->netif);
 }
 
+/* buffer ownership and responsivity [if_output]
+ *   pbuf: return all to the caller in lwip
+ *   mbuf: transfer the ownership of a newly allocated mbuf to
+ *         the underlying port
+ */
 static err_t
 low_level_output(struct netif *netif, struct pbuf *p)
 {

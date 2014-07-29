@@ -102,6 +102,10 @@ rte_port_kni_rx_burst(struct rte_port *rte_port,
 	return rx;
 }
 
+/* buffer ownership and responsivity [tx_burst]
+ *   mbuf: transfer the ownership of all mbuf sent successfully to
+ *         the underlying device, otherwise free all here
+ */
 int
 rte_port_kni_tx_burst(struct rte_port *rte_port,
 		      struct rte_mbuf **pkts, uint32_t n_pkts)
@@ -114,13 +118,11 @@ rte_port_kni_tx_burst(struct rte_port *rte_port,
 	p = container_of(rte_port, struct rte_port_kni, rte_port);
 
 	tx = rte_kni_tx_burst(p->kni, pkts, n_pkts);
-
 	p->rte_port.stats.tx_packets += tx;
 
 	if (unlikely(tx < n_pkts)) {
 		for (; tx < n_pkts; tx++) {
 			rte_pktmbuf_free(pkts[tx]);
-			pkts[tx] = NULL;
 			p->rte_port.stats.tx_dropped += 1;
 		}
         }

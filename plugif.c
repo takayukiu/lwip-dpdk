@@ -70,6 +70,10 @@ plugif_init(struct plugif *plugif, struct rte_port_plug_params *params,
 	return ERR_OK;
 }
 
+/* buffer ownership and responsivity [if_input]
+ *   pbuf: transfer the ownership of a newly allocated pbuf to lwip
+ *   mbuf: free all here
+ */
 err_t
 plugif_input(struct plugif *plugif, struct rte_mbuf *m)
 {
@@ -81,6 +85,7 @@ plugif_input(struct plugif *plugif, struct rte_mbuf *m)
 
 	p = pbuf_alloc(PBUF_RAW, len, PBUF_POOL);
 	if (p == 0) {
+		rte_pktmbuf_free(m);
 		plugif->plug_port->rte_port.stats.rx_dropped += 1;
 		return ERR_OK;
 	}
@@ -89,12 +94,16 @@ plugif_input(struct plugif *plugif, struct rte_mbuf *m)
 		rte_memcpy(q->payload, dat, q->len);
 		dat += q->len;
 	}
-
 	rte_pktmbuf_free(m);
 
 	return plugif->netif.input(p, &plugif->netif);
 }
 
+/* buffer ownership and responsivity [if_output]
+ *   pbuf: return all to the caller in lwip
+ *   mbuf: transfer the ownership of a newly allocated mbuf to
+ *         the underlying port
+ */
 static err_t
 low_level_output(struct netif *netif, struct pbuf *p)
 {
@@ -106,6 +115,9 @@ low_level_output(struct netif *netif, struct pbuf *p)
 	RTE_VERIFY(plugif->rte_port_type == RTE_PORT_TYPE_PLUG);
 
 	plug_port = plugif->plug_port;
+
+	if (plug_port->rx_burst)
+		return ERR_OK;
 
 	m = rte_pktmbuf_alloc(pktmbuf_pool);
 	if (m == NULL)
@@ -120,8 +132,7 @@ low_level_output(struct netif *netif, struct pbuf *p)
 		rte_memcpy(data, q->payload, q->len);
 	}
 
-	if (plug_port->rx_burst)
-		plug_port->rx_burst(plug_port, &m, 1);
+	plug_port->rx_burst(plug_port, &m, 1);
 
 	return ERR_OK;
 }

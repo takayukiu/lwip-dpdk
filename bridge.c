@@ -222,6 +222,10 @@ bridge_rx_burst(struct rte_port_plug *plug_port,
 	return bridge_input(bridge, bridge_port, pkts, n_pkts);
 }
 
+/* buffer ownership and responsivity [tx_burst]
+ *   mbuf: transfer the ownership of all mbuf sent successfully to
+ *         the underlying device, otherwise free all here
+ */
 int
 bridge_tx_burst(struct rte_port_plug *plug_port,
 		struct rte_mbuf **pkts, uint32_t n_pkts)
@@ -232,16 +236,19 @@ bridge_tx_burst(struct rte_port_plug *plug_port,
 
 	for (i = 0; i < n_pkts; i++) {
 		if (plugif_input(plugif, pkts[i]) != ERR_OK) {
-			for (j = i; j < n_pkts; j++) {
-				plug_port->rte_port.stats.rx_dropped += 1;
+			for (j = i + 1; j < n_pkts; j++)
 				rte_pktmbuf_free(pkts[j]);
-			}
+			plug_port->rte_port.stats.rx_dropped += n_pkts - i;
 			return i;
 		}
 	}
 	return n_pkts;
 }
 
+/* buffer ownership and responsivity [udp_send]
+ *   pbuf: free a newly allocated pbuf here
+ *   mbuf: free all here
+ */
 static err_t
 bridge_tx_vxlan(struct bridge *bridge, struct rte_mbuf *m)
 {
@@ -262,25 +269,32 @@ bridge_tx_vxlan(struct bridge *bridge, struct rte_mbuf *m)
 	dat = rte_pktmbuf_mtod(m, char *);
 
 	for (i = 0; i < bridge->vxlan.nr_peers; i++) {
-		p = pbuf_alloc(PBUF_RAW, len + sizeof(*header), PBUF_POOL);
-		if (p == 0)
+		p = pbuf_alloc(PBUF_RAW, len, PBUF_POOL);
+		if (p == 0) {
+			rte_pktmbuf_free(m);
 			return ERR_MEM;
+		}
 
 		for(q = p; q != NULL; q = q->next) {
 			rte_memcpy(q->payload, dat, q->len);
 			dat += q->len;
 		}
-
 		ret = udp_send(bridge->vxlan.peers[i], p);
+		pbuf_free(p);
 		if (ret != ERR_OK) {
-			pbuf_free(p);
+			rte_pktmbuf_free(m);
 			return ret;
 		}
 	}
 
+	rte_pktmbuf_free(m);
 	return ERR_OK;
 }
 
+/* buffer ownership and responsivity [tx_burst]
+ *   mbuf: transfer the ownership of all mbuf sent successfully to
+ *         the underlying device, otherwise free all here
+ */
 int
 bridge_tx_vxlan_burst(struct rte_port_plug *plug_port,
 		      struct rte_mbuf **pkts, uint32_t n_pkts)
@@ -290,12 +304,11 @@ bridge_tx_vxlan_burst(struct rte_port_plug *plug_port,
 
 	for (i = 0; i < n_pkts; i++) {
 		if (bridge_tx_vxlan(bridge, pkts[i]) != ERR_OK) {
-			for (j = i; j < n_pkts; j++) {
-				plug_port->rte_port.stats.rx_dropped += 1;
+			for (j = i + 1; j < n_pkts; j++)
 				rte_pktmbuf_free(pkts[j]);
-			}
+			plug_port->rte_port.stats.rx_dropped += n_pkts - i;
+			return i;
 		}
-		return i;
 	}
 	return n_pkts;
 }

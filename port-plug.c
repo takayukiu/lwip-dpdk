@@ -66,6 +66,10 @@ rte_port_plug_create(struct rte_port_plug_params *conf,
 	return port;
 }
 
+/* buffer ownership and responsivity [tx_burst]
+ *   mbuf: transfer the ownership of all mbuf sent successfully to
+ *         the underlying device, otherwise free all here
+ */
 int
 rte_port_plug_tx_burst(struct rte_port *rte_port,
 		       struct rte_mbuf **pkts, uint32_t n_pkts)
@@ -85,7 +89,6 @@ rte_port_plug_tx_burst(struct rte_port *rte_port,
 	if (unlikely(tx < n_pkts)) {
 		for (; tx < n_pkts; tx++) {
 			rte_pktmbuf_free(pkts[tx]);
-			pkts[tx] = NULL;
 			p->rte_port.stats.tx_dropped += 1;
 		}
         }
